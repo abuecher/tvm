@@ -129,7 +129,7 @@ class TVM_DLL GraphRuntime : public ModuleNode {
    * \return The type of the index-th input.
    */
   std::string GetInputType(int index) const;
-   /*!
+  /*!
    * \brief set index-th input to the graph without copying the data
    * \param index The input index.
    * \param data_ref The input data that is referred.

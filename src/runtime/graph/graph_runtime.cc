@@ -115,8 +115,7 @@ void GraphRuntime::SetInput(int index, DLTensor* data_in) {
  * \return The name of the index-th input.
  */
 std::string GraphRuntime::GetInputName(int index) const {
-  CHECK_LT(static_cast<size_t>(index), input_nodes_.size())
-      << "The index is out of range.";
+  CHECK_LT(static_cast<size_t>(index), input_nodes_.size()) << "The index is out of range.";
   return nodes_[input_nodes_[index]].name;
 }
 /*!
@@ -126,8 +125,7 @@ std::string GraphRuntime::GetInputName(int index) const {
  * \return The type of the index-th input.
  */
 std::string GraphRuntime::GetInputType(int index) const {
-  CHECK_LT(static_cast<size_t>(index), input_nodes_.size())
-      << "The index is out of range.";
+  CHECK_LT(static_cast<size_t>(index), input_nodes_.size()) << "The index is out of range.";
   uint32_t eid = this->entry_id(input_nodes_[index], 0);
   return attrs_.dltype[eid];
 }
@@ -136,9 +134,7 @@ std::string GraphRuntime::GetInputType(int index) const {
  *
  * \return The names of the weight inputs.
  */
-std::vector<std::string> GraphRuntime::GetWeightNames() const {
-  return weight_names_;
-}
+std::vector<std::string> GraphRuntime::GetWeightNames() const { return weight_names_; }
 /*!
  * \brief set index-th input to the graph without copying the data.
  * \param index The input index.
@@ -183,8 +179,7 @@ int GraphRuntime::NumInputs() const { return input_nodes_.size(); }
  * \return The type of the index-th output.
  */
 std::string GraphRuntime::GetOutputType(int index) const {
-  CHECK_LT(static_cast<size_t>(index), outputs_.size())
-      << "The index is out of range.";
+  CHECK_LT(static_cast<size_t>(index), outputs_.size()) << "The index is out of range.";
   uint32_t eid = this->entry_id(outputs_[index]);
   return attrs_.dltype[eid];
 }

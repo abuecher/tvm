@@ -22,8 +22,8 @@
  */
 #include <mlas.h>
 #include <tvm/runtime/data_type.h>
-#include <tvm/support/logging.h>
 #include <tvm/runtime/registry.h>
+#include <tvm/support/logging.h>
 
 namespace tvm {
 namespace contrib {
