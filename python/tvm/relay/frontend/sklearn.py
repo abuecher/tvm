@@ -18,6 +18,8 @@
 # pylint: disable=import-outside-toplevel
 
 import numpy as np
+import tvm
+from enum import IntEnum
 from tvm import relay
 from tvm.ir import IRModule
 
@@ -143,6 +145,24 @@ def _Pipeline(op, inexpr, dshape, dtype, func_name, columns=None):
     return inexpr
 
 
+def _MultiColumn(op, inexpr, dshape, dtype, func_name, columns=None):
+    """
+    Scikit-Learn Pipeline:
+    Handling of multi-column based tranforms which applied on multiple inputs (len(inexpr) > 0)
+    Currently support: MultiColumnTfidfVectorizer
+    """
+    assert len(inexpr) > 0
+    out = []
+    for idx, sub_vec in enumerate(op.vectorizers_):
+        num_features = len(sub_vec.get_feature_names())
+        out.append(
+            sklearn_op_to_relay(
+                sub_vec, inexpr[idx], (dshape[0], num_features), dtype, func_name, columns
+            )
+        )
+    return _op.concatenate(out, axis=1)
+
+
 def _ColumnTransformer(op, inexpr, dshape, dtype, func_name, columns=None):
     """
     Scikit-Learn Compose:
@@ -163,6 +183,9 @@ def _ColumnTransformer(op, inexpr, dshape, dtype, func_name, columns=None):
                         pipe, inexpr[op_type], date_shape, dtype, func_name, date_cols
                     )
                 )
+        elif proc_name == "text_processing":
+            # Pass all text input count matrices to pipeline, which is the last section of input array
+            out.append(sklearn_op_to_relay(pipe, inexpr[op_type:], dshape, dtype, func_name, cols))
         else:
             out.append(sklearn_op_to_relay(pipe, inexpr[op_type], dshape, dtype, func_name, cols))
 
@@ -586,6 +609,7 @@ def _DateTimeVectorizer(op, inexpr, dshape, dtype, columns=None):
 
 _convert_map = {
     "ColumnTransformer": {"transform": _ColumnTransformer},
+    "ColumnTransformer": {"transform": _ColumnTransformer},
     "SimpleImputer": {"transform": _SimpleImputer},
     "RobustImputer": {"transform": _RobustImputer},
     "RobustStandardScaler": {"transform": _RobustStandardScaler},
@@ -595,6 +619,7 @@ _convert_map = {
     "RobustOrdinalEncoder": {"transform": _RobustOrdinalEncoder},
     "KBinsDiscretizer": {"transform": _KBinsDiscretizer},
     "TfidfVectorizer": {"transform": _TfidfVectorizer},
+    "MultiColumnTfidfVectorizer": {"transform": _MultiColumn},
     "RobustMissingIndicator": {"transform": _RobustMissingIndicator},
     "RobustPCA": {"transform": _RobustPCA},
     "FeatureUnion": {"transform": _FeatureUnion},
@@ -602,18 +627,23 @@ _convert_map = {
     "Pipeline": {"transform": _Pipeline},
 }
 
-INPUT_FLOAT = 0
-INPUT_STRING = 1
-INPUT_DATETIME = 2
+
+class Category(IntEnum):
+    INPUT_FLOAT = 0
+    INPUT_STRING = 1
+    INPUT_DATETIME = 2
+    INPUT_TEXT = 3
+
 
 column_transformer_op_types = {
-    "RobustImputer": INPUT_FLOAT,
-    "RobustMissingIndicator": INPUT_FLOAT,
-    "FeatureUnion": INPUT_FLOAT,
-    "RobustStandardScaler": INPUT_FLOAT,
-    "RobustOrdinalEncoder": INPUT_STRING,
-    "ThresholdOneHotEncoder": INPUT_STRING,
-    "DateTimeVectorizer": INPUT_DATETIME,
+    "RobustImputer": Category.INPUT_FLOAT,
+    "RobustMissingIndicator": Category.INPUT_FLOAT,
+    "FeatureUnion": Category.INPUT_FLOAT,
+    "RobustStandardScaler": Category.INPUT_FLOAT,
+    "RobustOrdinalEncoder": Category.INPUT_STRING,
+    "ThresholdOneHotEncoder": Category.INPUT_STRING,
+    "DateTimeVectorizer": Category.INPUT_DATETIME,
+    "MultiColumnTfidfVectorizer": Category.INPUT_TEXT,
 }
 
 
@@ -632,7 +662,7 @@ def sklearn_op_to_relay(op, inexpr, dshape, dtype, func_name, columns=None):
             )
         )
 
-    if classname in ["ColumnTransformer", "Pipeline", "FeatureUnion"]:
+    if classname in ["ColumnTransformer", "Pipeline", "FeatureUnion", "MultiColumnTfidfVectorizer"]:
         return _convert_map[classname][func_name](op, inexpr, dshape, dtype, func_name, columns)
 
     return _convert_map[classname][func_name](op, inexpr, dshape, dtype, columns)
@@ -669,6 +699,8 @@ def from_auto_ml(model, shape=None, dtype="float32", func_name="transform"):
     if func_name == "transform":
         inexpr_float = _expr.var("input_float", shape=shape, dtype=dtype)
         inexpr_string = _expr.var("input_string", shape=shape, dtype=dtype)
+        inexpr_datetime = None
+        inexpr_texts = []
 
         inexpr = [inexpr_float, inexpr_string]
 
@@ -680,12 +712,25 @@ def from_auto_ml(model, shape=None, dtype="float32", func_name="transform"):
                 )
             )
 
-        for proc_name, _, cols in column_transformer.transformers_:
+        for proc_name, transformer, cols in column_transformer.transformers_:
             if proc_name == "datetime_processing":
                 inexpr_datetime = _expr.var(
                     "input_datetime", shape=(shape[0], len(cols) * kNumDateTimeCols), dtype=dtype
                 )
-                inexpr.append(inexpr_datetime)
+            if proc_name == "text_processing":
+                multivec = transformer.steps[0][1]
+                for idx, sub_vec in enumerate(multivec.vectorizers_):
+                    num_features = len(sub_vec.get_feature_names())
+                    inexpr_texts.append(
+                        _expr.var(
+                            "input_text{}".format(idx), shape=(shape[0], num_features), dtype=dtype
+                        )
+                    )
+
+        inexpr.append(inexpr_datetime)  # Padding None if inexpr_datetime is empty
+
+        for inexpr_text in inexpr_texts:
+            inexpr.append(inexpr_text)
 
         outexpr = inexpr
         for _, transformer in model.feature_transformer.steps:

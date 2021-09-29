@@ -22,11 +22,12 @@ from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.preprocessing import StandardScaler, KBinsDiscretizer
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sagemaker_sklearn_extension.externals import AutoMLTransformer
 from sagemaker_sklearn_extension.externals import Header
 from sagemaker_sklearn_extension.impute import RobustImputer, RobustMissingIndicator
 from sagemaker_sklearn_extension.decomposition import RobustPCA
+from sagemaker_sklearn_extension.feature_extraction.text import MultiColumnTfidfVectorizer
 from sagemaker_sklearn_extension.preprocessing import (
     RobustStandardScaler,
     ThresholdOneHotEncoder,
@@ -277,6 +278,49 @@ def test_automl():
 
     dshape = (relay.Any(), relay.Any())
     _test_model_impl(st_helper, automl_transformer, dshape, data, auto_ml=True)
+
+
+def test_automl_multicolumn_tfidifvectorizer():
+    st_helper = SklearnTestHelper()
+    mctiv = MultiColumnTfidfVectorizer()
+
+    corpus = np.array(
+        [
+            ["Cats eat rats.", "Rats are mammals."],
+            ["Dogs chase cats.", "Rats are mammals."],
+            ["People like dogs.", "Rats are mammals."],
+            ["People hate rats.", "Rats are mammals."],
+        ]
+    )
+
+    pipeline = Pipeline(steps=[("multicolumnvectorizer", mctiv)])
+
+    column_transformer = ColumnTransformer(transformers=[("text_processing", pipeline, [0, 1])])
+    column_transformer.fit(corpus)
+
+    pipeline = Pipeline(steps=[("column_transformer", column_transformer)])
+    header = Header(column_names=["x1", "x2"], target_column_name="x2")
+
+    automl_transformer = AutoMLTransformer(header, pipeline, None)
+
+    dshape = [relay.Any(), relay.Any()]
+    st_helper.compile(automl_transformer, dshape, "float32", "transform", None, True)
+
+    multivec = column_transformer.transformers_[0][1].steps[0][1]
+
+    sklearn_out = mctiv.fit_transform(corpus).toarray()
+
+    input_data = []
+    for idx, sub_vec in enumerate(multivec.vectorizers_):
+        vectorizer = CountVectorizer(dtype=np.float32)
+        vectorizer.vocabulary_ = sub_vec.vocabulary_
+        vectorizer.fixed_vocabulary_ = sub_vec.fixed_vocabulary_
+        vectorizer.stop_words_ = sub_vec.stop_words_
+        input_data.append(vectorizer.transform(corpus[:, idx]).toarray())
+
+    tvm_out = st_helper.ex.evaluate()(input_data[0], input_data[1]).asnumpy()
+
+    tvm.testing.assert_allclose(sklearn_out, tvm_out, rtol=1e-5, atol=1e-5)
 
 
 def test_feature_union():
